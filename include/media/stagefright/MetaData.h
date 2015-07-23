@@ -183,6 +183,12 @@ enum {
     kKeyCryptoDefaultIVSize = 'cryS',  // int32_t
 
     kKeyPssh              = 'pssh',  // raw data
+    kKeyIMemPointer   = 'imem',  // imem pointer
+    kKeyRawCodecSpecificData = 'rcsd', //raw data
+    kKeyMpeg4GMCWrapPoint = 'gmcw', //mpeg4 gmc wrap point
+    kKeyRecommendOutputCount    = 'outc', //Recommend minimum output buffer count.
+    kKeyFrameSizeMRVL  = 'frsz', //number of bytes in one frame
+    kKey263AdvancedFeatures = '263A', // Indicate H.263 has advanced features.
 #ifdef QCOM_HARDWARE
     kKeyTunnelException   = 'Ntnl', // not tunnel
 #endif

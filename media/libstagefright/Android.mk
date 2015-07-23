@@ -87,6 +87,9 @@ LOCAL_C_INCLUDES:= \
         $(TOP)/external/flac/include \
         $(TOP)/external/tremolo \
         $(TOP)/external/openssl/include \
+        $(TOP)/vendor/marvell/generic/marvell-gralloc \
+        $(TOP)/vendor/marvell/generic/ipplib/openmax/include \
+        $(TOP)/hardware/libhardware/include/hardware \
 
 ifneq ($(TI_CUSTOM_DOMX_PATH),)
 LOCAL_C_INCLUDES += $(TI_CUSTOM_DOMX_PATH)/omx_core/inc

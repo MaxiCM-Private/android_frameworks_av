@@ -20,6 +20,7 @@
 #include <media/stagefright/ACodec.h>
 
 #include <binder/MemoryDealer.h>
+#include <binder/MemoryBase.h>
 
 #include <media/stagefright/foundation/hexdump.h>
 #include <media/stagefright/foundation/ABuffer.h>
@@ -416,6 +417,42 @@ ACodec::ACodec()
 ACodec::~ACodec() {
 }
 
+status_t ACodec::initOutputBufferInfo(){
+    if (mNativeWindow == NULL){
+        return UNKNOWN_ERROR;
+    }
+    OMX_PARAM_PORTDEFINITIONTYPE def;
+    InitOMXParams(&def);
+    def.nPortIndex = kPortIndexOutput;
+
+    status_t err = mOMX->getParameter(
+            mNode, OMX_IndexParamPortDefinition, &def, sizeof(def));
+    if (err != OK) {
+        return err;
+    }
+    int minUndequeuedBufs = 0;
+    err = mNativeWindow->query(mNativeWindow.get(),
+            NATIVE_WINDOW_MIN_UNDEQUEUED_BUFFERS, &minUndequeuedBufs);
+    if (err != 0) {
+        ALOGE("NATIVE_WINDOW_MIN_UNDEQUEUED_BUFFERS query failed: %s (%d)",
+                strerror(-err), -err);
+        return err;
+    }
+
+    if (def.nBufferCountActual < def.nBufferCountMin + minUndequeuedBufs) {
+        OMX_U32 newBufferCount = def.nBufferCountMin + minUndequeuedBufs;
+        def.nBufferCountActual = newBufferCount;
+        err = mOMX->setParameter(
+                mNode, OMX_IndexParamPortDefinition, &def, sizeof(def));
+        if (err != OK) {
+            ALOGE("setting nBufferCountActual to %lu failed: %d",
+                    newBufferCount, err);
+            return err;
+        }
+    }
+    return OK;
+}
+
 void ACodec::setNotificationMessage(const sp<AMessage> &msg) {
     mNotify = msg;
 }
@@ -509,6 +546,7 @@ status_t ACodec::allocateBuffersOnPort(OMX_U32 portIndex) {
                 mNode, OMX_IndexParamPortDefinition, &def, sizeof(def));
 
         if (err == OK) {
+            size_t defBufSzActual = (def.nBufferSize+getpagesize()-1)&~(getpagesize()-1);//getpagesize() return 4096 currently
 #if defined(MTK_HARDWARE) && defined(ENABLE_MTK_BUF_ADDR_ALIGNMENT)
             def.nBufferSize = ((def.nBufferSize + MTK_BUF_ADDR_ALIGNMENT_VALUE-1) & ~(MTK_BUF_ADDR_ALIGNMENT_VALUE-1));
 #endif
@@ -521,10 +559,28 @@ status_t ACodec::allocateBuffersOnPort(OMX_U32 portIndex) {
 #if defined(MTK_HARDWARE) && defined(ENABLE_MTK_BUF_ADDR_ALIGNMENT)
             totalSize = def.nBufferCountActual * (((def.nBufferSize + MTK_BUF_ADDR_ALIGNMENT_VALUE-1) & ~(MTK_BUF_ADDR_ALIGNMENT_VALUE-1)) + MTK_BUF_ADDR_ALIGNMENT_VALUE);
 #endif
-            mDealer[portIndex] = new MemoryDealer(totalSize, "ACodec");
+			if (!strncmp(mComponentName.c_str(), "OMX.MARVELL.VIDEO.VMETA", 18)) {
+				sp<MemoryHeapBase> heap = new MemoryHeapBase("/dev/ion", totalSize, MemoryHeapBase::NO_CACHING);
+				if (heap->heapID() < 0) {
+					ALOGE("Failed to allocate ion memory from %s", "/dev/ion");
+					return UNKNOWN_ERROR;
+				} else {
+					mIOMXHeap[portIndex] = heap;
+				}
+			} else {
+				mDealer[portIndex] = new MemoryDealer(totalSize, "ACodec");
+			}
+
+            // mDealer[portIndex] = new MemoryDealer(totalSize, "ACodec");
 
             for (OMX_U32 i = 0; i < def.nBufferCountActual; ++i) {
-                sp<IMemory> mem = mDealer[portIndex]->allocate(def.nBufferSize);
+				sp<IMemory> mem;
+				if (!strncmp(mComponentName.c_str(), "OMX.MARVELL.VIDEO.VMETA", 18)) {
+					mem = new MemoryBase(mIOMXHeap[portIndex], i * defBufSzActual, defBufSzActual);
+				} else {
+					mem = mDealer[portIndex]->allocate(def.nBufferSize);
+				}
+                // sp<IMemory> mem = mDealer[portIndex]->allocate(def.nBufferSize);
                 CHECK(mem.get() != NULL);
 
                 BufferInfo info;
@@ -607,7 +663,20 @@ status_t ACodec::configureOutputBuffersFromNativeWindow(
     if (err != OK) {
         return err;
     }
-
+    int halFmt = 0;
+    //remapping the color format for mrvl native window implementation
+    if(OMX_COLOR_FormatYUV420Planar == def.format.video.eColorFormat){
+        halFmt = HAL_PIXEL_FORMAT_YCbCr_420_P; // YUV420
+        ALOGI("Native Window Buffer Geometry %lu.%lu - OMX_COLOR_FormatYUV420Planar", def.format.video.nFrameWidth, def.format.video.nFrameHeight);
+    }else if(OMX_COLOR_FormatYUV420SemiPlanar == def.format.video.eColorFormat){
+        halFmt = HAL_PIXEL_FORMAT_YCbCr_420_SP_MRVL; // NV12
+        ALOGI("Native Window Buffer Geometry %lu.%lu - OMX_COLOR_FormatYUV420SemiPlanar", def.format.video.nFrameWidth, def.format.video.nFrameHeight);
+    }else if(OMX_COLOR_FormatCbYCrY == def.format.video.eColorFormat){
+       halFmt = HAL_PIXEL_FORMAT_CbYCrY_422_I; // UYVY
+       ALOGI("Native Window Buffer Geometry %lu.%lu - OMX_COLOR_FormatCbYCrY", def.format.video.nFrameWidth, def.format.video.nFrameHeight);
+    }else{
+        ALOGE("Not support/mapped color format %d!!!", def.format.video.eColorFormat);
+    }
 #ifdef USE_SAMSUNG_COLORFORMAT
     OMX_COLOR_FORMATTYPE eNativeColorFormat = def.format.video.eColorFormat;
     setNativeWindowColorFormat(eNativeColorFormat);
@@ -616,7 +685,7 @@ status_t ACodec::configureOutputBuffersFromNativeWindow(
     mNativeWindow.get(),
     def.format.video.nFrameWidth,
     def.format.video.nFrameHeight,
-    eNativeColorFormat);
+    halFmt);
 #elif defined(MTK_HARDWARE)
     uint32_t eHalWidth       = def.format.video.nFrameWidth;
     uint32_t eHalHeight      = def.format.video.nFrameHeight;
@@ -1648,10 +1717,11 @@ status_t ACodec::setupAACCodec(
     profile.nChannels = numChannels;
     profile.nSampleRate = sampleRate;
 
-    profile.eAACStreamFormat =
-        isADTS
-            ? OMX_AUDIO_AACStreamFormatMP4ADTS
-            : OMX_AUDIO_AACStreamFormatMP4FF;
+	profile.eAACStreamFormat = OMX_AUDIO_AACStreamFormatMP4ADTS;
+     // profile.eAACStreamFormat =
+         // isADTS
+             // ? OMX_AUDIO_AACStreamFormatMP4ADTS
+             // : OMX_AUDIO_AACStreamFormatMP4FF;
 
     return mOMX->setParameter(
             mNode, OMX_IndexParamAudioAac, &profile, sizeof(profile));
@@ -4709,6 +4779,7 @@ bool ACodec::OutputPortSettingsChangedState::onOMXEvent(
                 CHECK(mCodec->mBuffers[kPortIndexOutput].isEmpty());
                 mCodec->mDealer[kPortIndexOutput].clear();
 
+                mCodec->initOutputBufferInfo();
                 CHECK_EQ(mCodec->mOMX->sendCommand(
                             mCodec->mNode, OMX_CommandPortEnable, kPortIndexOutput),
                          (status_t)OK);
