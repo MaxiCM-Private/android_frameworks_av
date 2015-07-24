@@ -15,9 +15,9 @@ LOCAL_C_INCLUDES += \
         $(TOP)/frameworks/av/media/libstagefright \
         $(TOP)/frameworks/native/include/media/hardware \
         $(TOP)/frameworks/native/include/media/openmax \
-        $(TOP)/vendor/marvell/generic/marvell-gralloc \
+        $(TOP)/hardware/marvell/marvell-gralloc \
         $(TOP)/hardware/libhardware/include/hardware \
-        $(TOP)/vendor/marvell/generic/ipplib/openmax/include
+        $(TOP)/hardware/marvell/ipplib/openmax/include
 
 LOCAL_SHARED_LIBRARIES :=               \
         libbinder                       \
